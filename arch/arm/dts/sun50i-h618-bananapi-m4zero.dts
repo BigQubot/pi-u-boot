@@ -13,7 +13,7 @@
 
 / {
 	model = "Banana Pi M4 Zero";
-	compatible = "BiPai,bananapi-m4zero", "allwinner,sun50i-h618";
+	compatible = "bananapi,bananapi-m4zero", "allwinner,sun50i-h618";
 
 	aliases {
 		ethernet0 = &emac0;
