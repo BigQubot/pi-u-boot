@@ -1287,7 +1287,11 @@ static unsigned long mctl_calc_size(struct dram_para *para)
 {
 	u8 width = para->bus_full_width ? 4 : 2;
 	unsigned long size;
-
+	
+	#ifdef BPI
+	#else
+		printf("para->cols[%x] para->rows[%x] width[%x] para->ranks[%x]\nDRAM:",para->cols, para->rows, width, para->ranks);
+	#endif
 	/* 8 banks */
 	size = (1ULL << (para->cols + para->rows + 3)) * width * para->ranks;
 
@@ -1304,6 +1308,11 @@ unsigned long sunxi_dram_init(void)
 	};
 	unsigned long size;
 
+	#ifdef BPI
+	#else
+		udelay(1000); /* delay for PMIC ready*/
+	#endif
+	
 	if (IS_ENABLED(CONFIG_SUNXI_DRAM_H616_DDR3_1333))
 		para.type = SUNXI_DRAM_TYPE_DDR3;
 	if (IS_ENABLED(CONFIG_SUNXI_DRAM_H616_LPDDR3))
