@@ -1310,7 +1310,7 @@ unsigned long sunxi_dram_init(void)
 
 	#ifdef BPI
 	#else
-		udelay(2000); /* delay for PMIC ready*/
+		udelay(1000); /* delay for PMIC ready*/
 	#endif
 
 	if (IS_ENABLED(CONFIG_SUNXI_DRAM_H616_DDR3_1333))
