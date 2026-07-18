@@ -91,7 +91,6 @@ GTAGS
 *.gcno
 
 boot_package.cfg
-dts
 *.dtb
 *.dtbo
 *.fex
