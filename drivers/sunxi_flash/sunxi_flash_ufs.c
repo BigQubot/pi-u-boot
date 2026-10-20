@@ -105,7 +105,11 @@ static int sunxi_flash_ufs_blk_init(void)
 {
 	debug("sunxi flash init uboot\n");
 	sunxi_flash_ufs_blk_dev.if_type   = IF_TYPE_SUNXI_FLASH_UFS;
-	sunxi_flash_ufs_blk_dev.part_type = PART_TYPE_EFI;
+	/*
+	 * Keep partition probing dynamic for UFS too, matching sunxi_flash behavior.
+	 * This avoids hard-wiring GPT and allows DOS/GPT images to be parsed correctly.
+	 */
+	sunxi_flash_ufs_blk_dev.part_type = PART_TYPE_UNKNOWN;
 	sunxi_flash_ufs_blk_dev.devnum    = 0;
 	sunxi_flash_ufs_blk_dev.lun       = 0;
 	sunxi_flash_ufs_blk_dev.type      = 0;

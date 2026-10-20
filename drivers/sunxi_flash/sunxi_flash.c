@@ -1060,7 +1060,12 @@ static int sunxi_flash_init_blk(void)
 {
 	debug("sunxi flash init uboot\n");
 	sunxi_flash_blk_dev.if_type   = IF_TYPE_SUNXI_FLASH;
-	sunxi_flash_blk_dev.part_type = PART_TYPE_EFI;
+	/*
+	 * Do not force EFI/GPT parsing for sunxi_flash media.
+	 * Let U-Boot detect the real partition table type (DOS/GPT) at runtime.
+	 * This is required for SD/eMMC images that intentionally use msdos labels.
+	 */
+	sunxi_flash_blk_dev.part_type = PART_TYPE_UNKNOWN;
 	sunxi_flash_blk_dev.devnum    = 0;
 	sunxi_flash_blk_dev.lun       = 0;
 	sunxi_flash_blk_dev.type      = 0;

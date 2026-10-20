@@ -264,8 +264,6 @@ void trilinear_aux_init(struct sunxi_edp_hw_desc *edp_hw, struct edp_tx_core *ed
 	// FIXME: 200 refer to raw code from SHC
 	u32 src_apb_clk = 200;
 
-	// FIXME: pass from dts
-	mode = 1;
 	if (mode == AUX_EDP_MODE)
 		TR_SET_BITS(edp_hw, TR_CAPBILITY_CONFIG, 1, 1, 0x1);
 	else

@@ -2942,7 +2942,7 @@ static int mmc_startup(struct mmc *mmc)
 	bdesc->revision[0] = 0;
 #endif
 #if !defined(CONFIG_SPL_BUILD) || defined(CONFIG_SPL_LIBDISK_SUPPORT)
-//	part_init(bdesc);
+	part_init(bdesc);
 #endif
 
 	return 0;
@@ -4115,24 +4115,38 @@ int mmc_initialize(bd_t *bis)
 int mmc_exit(void)
 {
 	int err;
-	int sdc_no = 2;
-	struct mmc *mmc = find_mmc_device(sdc_no);
-	bool uhs_en = supports_uhs(mmc->cfg->host_caps);
+	int sdc_no = board_mmc_get_num();
+	int dev_num = sunxi_mmcno_to_devnum(sdc_no);
+	struct mmc *mmc = NULL;
+	bool uhs_en;
+
+	if (dev_num >= 0)
+		mmc = find_mmc_device(dev_num);
 
 	if (mmc == NULL) {
-		MMCINFO("mmc %d not find, so not exit\n", sdc_no);
+		/* Legacy fallback for platforms that still expect eMMC on sdc2/sdc3 */
+		int fallback_sdc_no[] = { 2, 3 };
+		int i;
 
-		#ifdef CONFIG_MMC3_SUPPORT
-			sdc_no = 3;
-			mmc = find_mmc_device(sdc_no);
-			if (mmc == NULL) {
-				MMCINFO("mmc %d not find, so not exit\n", sdc_no);
-				return 0;
-			}
-		#else
+		MMCINFO("mmc %d not find, try legacy fallback\n", sdc_no);
+		for (i = 0; i < ARRAY_SIZE(fallback_sdc_no); i++) {
+			sdc_no = fallback_sdc_no[i];
+			dev_num = sunxi_mmcno_to_devnum(sdc_no);
+			if (dev_num < 0)
+				continue;
+
+			mmc = find_mmc_device(dev_num);
+			if (mmc != NULL)
+				break;
+		}
+
+		if (mmc == NULL) {
+			MMCINFO("mmc device not ready, so not exit\n");
 			return 0;
-		#endif
+		}
 	}
+
+	uhs_en = supports_uhs(mmc->cfg->host_caps);
 
 	MMCINFO("mmc exit start\n");
 

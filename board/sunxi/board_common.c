@@ -55,6 +55,9 @@
 #include "sunxi_replace_fdt.h"
 #endif
 #include <sunxi_logo_display.h>
+#ifdef CONFIG_SUNXI_DRM_SUPPORT
+#include <drm/drm_logo.h>
+#endif
 #ifdef CONFIG_SUNXI_LRADC_VOL
 #include "sunxi_lradc_vol.h"
 #endif
@@ -748,6 +751,8 @@ int board_late_init(void)
 	}
 #endif
 	if (work_mode == WORK_MODE_BOOT) {
+		int armbian_boot = env_get_yesno("armbian_boot") == 1;
+
 #ifdef CONFIG_SUNXI_SWITCH_SYSTEM
 		sunxi_auto_switch_system();
 #endif
@@ -801,16 +806,19 @@ int board_late_init(void)
 		else
 #endif
 #ifndef CONFIG_SUNXI_RTOS
-		sunxi_update_partinfo();
-		if (sunxi_update_rotpk_info()) {
-			return -1;
+		if (!armbian_boot) {
+			sunxi_update_partinfo();
+			if (sunxi_update_rotpk_info()) {
+				return -1;
+			}
 		}
 #endif
 #ifdef CONFIG_SUNXI_POWER
 		sunxi_power_startup_status_handle();
 #endif
 		sunxi_respond_ir_key_action();
-		sunxi_update_bootcmd();
+		if (!armbian_boot)
+			sunxi_update_bootcmd();
 #ifdef CONFIG_PCIE_ALLWINNER_RC
 		pci_init();
 #endif
@@ -821,13 +829,18 @@ int board_late_init(void)
 		sunxi_read_lradc_vol();
 #endif
 #if !defined(CONFIG_OF_SEPARATE)
-		sunxi_update_fdt_para_for_kernel();
+		if (!armbian_boot)
+			sunxi_update_fdt_para_for_kernel();
 #elif defined(CONFIG_SUNXI_NECESSARY_REPLACE_FDT)
-		sunxi_replace_fdt_v2();
-		sunxi_update_fdt_para_for_kernel();
+		if (!armbian_boot) {
+			sunxi_replace_fdt_v2();
+			sunxi_update_fdt_para_for_kernel();
+		}
 #elif defined(CONFIG_SUNXI_REPLACE_FDT_FROM_PARTITION)
-		sunxi_replace_fdt();
-		sunxi_update_fdt_para_for_kernel();
+		if (!armbian_boot) {
+			sunxi_replace_fdt();
+			sunxi_update_fdt_para_for_kernel();
+		}
 #endif
 #ifdef CONFIG_SUNXI_TV_FASTLOGO
 		if (p_fastlogo) {
@@ -886,6 +899,9 @@ void reset_misc(void)
   */
 void board_quiesce_devices(void)
 {
+#ifdef CONFIG_SUNXI_DRM_SUPPORT
+	sunxi_drm_handoff_to_kernel();
+#endif
 	sunxi_flash_flush();
 	/*modify 2 for nor to finally exit*/
 	sunxi_flash_exit(2);

@@ -272,48 +272,39 @@ endif
 endif
 
 #########################################################################
-ifeq (x$(CONFIG_CPU_E90X), xy)
-RISCV_PATH=Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.8.1
-else ifeq (x$(CONFIG_ARCH_RV32I), xy)
-RISCV_PATH=nds32le-linux-glibc-v5d
-else
-RISCV_PATH=riscv64-linux-x86_64-20200528
-endif
-
-riscv_toolchain_check=$(shell if [ ! -d ../tools/toolchain/$(RISCV_PATH) ]; then echo yes; else echo no; fi;)
-ifeq (x$(riscv_toolchain_check), xyes)
-$(info Prepare riscv toolchain ...);
-$(shell mkdir -p ../tools/toolchain/$(RISCV_PATH) || exit 1)
-$(shell tar --strip-components=1 -xf ../tools/toolchain/$(RISCV_PATH).tar.xz -C ../tools/toolchain/$(RISCV_PATH) || exit 1)
-endif
-arm_toolchain_check=$(shell if [ ! -d ../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi ]; then echo yes; else echo no; fi;)
-ifeq (x$(arm_toolchain_check), xyes)
-$(info Prepare arm toolchain ...);
-$(shell mkdir -p ../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi || exit 1)
-$(shell tar --strip-components=1 -xf ../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi.tar.xz -C ../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi || exit 1)
-endif
-
-
+# Respect a toolchain supplied by the build system.  Only unpack the SDK
+# fallback for the selected architecture when no CROSS_COMPILE was given.
 ifeq (x$(CONFIG_RISCV), xy)
+DTS_PATH := $(CURDIR)/arch/riscv/dts
+ifeq ($(origin CROSS_COMPILE), undefined)
 ifeq (x$(CONFIG_CPU_E90X), xy)
-CROSS_COMPILE=$(srctree)/../tools/toolchain/$(RISCV_PATH)/bin/riscv64-unknown-linux-gnu-
-DTS_PATH := $(PWD)/arch/riscv/dts
+RISCV_PATH := Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.8.1
+RISCV_PREFIX := riscv64-unknown-linux-gnu-
 else ifeq (x$(CONFIG_ARCH_RV32I), xy)
-CROSS_COMPILE := $(srctree)/../tools/toolchain/$(RISCV_PATH)/bin/riscv32-unknown-linux-
-DTS_PATH := $(PWD)/arch/riscv/dts
+RISCV_PATH := nds32le-linux-glibc-v5d
+RISCV_PREFIX := riscv32-unknown-linux-
 else
-CROSS_COMPILE := $(srctree)/../tools/toolchain/$(RISCV_PATH)/bin/riscv64-unknown-linux-gnu-
-DTS_PATH := $(PWD)/arch/riscv/dts
+RISCV_PATH := riscv64-linux-x86_64-20200528
+RISCV_PREFIX := riscv64-unknown-linux-gnu-
+endif
+CROSS_COMPILE := $(srctree)/../tools/toolchain/$(RISCV_PATH)/bin/$(RISCV_PREFIX)
+ifeq ($(wildcard $(CROSS_COMPILE)gcc),)
+$(info Prepare riscv toolchain ...)
+$(shell mkdir -p $(srctree)/../tools/toolchain/$(RISCV_PATH) && tar --strip-components=1 -xf $(srctree)/../tools/toolchain/$(RISCV_PATH).tar.xz -C $(srctree)/../tools/toolchain/$(RISCV_PATH))
 endif
 endif
-
-ifeq (x$(CONFIG_ARM), xy)
+else
+DTS_PATH := $(CURDIR)/arch/arm/dts
+ifeq ($(origin CROSS_COMPILE), undefined)
 CROSS_COMPILE := $(srctree)/../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi/bin/arm-linux-gnueabi-
-DTS_PATH := $(PWD)/arch/arm/dts
+ifeq (x$(CONFIG_ARM), xy)
+ifeq ($(wildcard $(CROSS_COMPILE)gcc),)
+$(info Prepare arm toolchain ...)
+$(shell mkdir -p $(srctree)/../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi && tar --strip-components=1 -xf $(srctree)/../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi.tar.xz -C $(srctree)/../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi)
 endif
-
-CROSS_COMPILE ?= $(srctree)/../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi/bin/arm-linux-gnueabi-
-DTS_PATH ?= $(PWD)/arch/arm/dts
+endif
+endif
+endif
 
 #######################################################################
 # set default to nothing for native builds
@@ -451,8 +442,7 @@ KBUILD_CFLAGS   := -Wall -Wstrict-prototypes \
 		   -fno-builtin -ffreestanding $(CSTD_FLAG) \
 		   -Werror
 ifeq (x$(CONFIG_ARCH_RV32I), xy)
-KBUILD_CFLAGS	+= -Wno-error=address-of-packed-member
-KBUILD_CFLAGS	+= -Wno-address-of-packed-member
+KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
 endif
 KBUILD_CFLAGS	+= -fshort-wchar
 KBUILD_AFLAGS   := -D__ASSEMBLY__
@@ -1118,9 +1108,12 @@ u-boot-$(CONFIG_SYS_CONFIG_NAME).bin:   u-boot.bin
 ifeq ($(TARGET_BUILD_VARIANT),tina)
 	@cp -v $@ $(objtree)/../../../$(TARGET_BIN_DIR)/$(TARGET_BIN_NAME)
 else
-#LICHEE_BUSSINESS could be empty and result in "//", bui it will be treated as "/", it's fine
-	@-cp -v $@ $(LICHEE_CHIP_CONFIG_DIR)/$(LICHEE_BUSSINESS)/bin/$(TARGET_BIN_NAME)
-	@-cp -v $@ $(LICHEE_PLAT_OUT)/$(TARGET_BIN_NAME)
+	@if [ -n "$(LICHEE_CHIP_CONFIG_DIR)" ] && [ -d "$(LICHEE_CHIP_CONFIG_DIR)/$(LICHEE_BUSSINESS)/bin" ]; then \
+		cp -v $@ $(LICHEE_CHIP_CONFIG_DIR)/$(LICHEE_BUSSINESS)/bin/$(TARGET_BIN_NAME); \
+	fi
+	@if [ -n "$(LICHEE_PLAT_OUT)" ] && [ -d "$(LICHEE_PLAT_OUT)" ]; then \
+		cp -v $@ $(LICHEE_PLAT_OUT)/$(TARGET_BIN_NAME); \
+	fi
 endif
 
 %.imx: %.bin
@@ -1630,7 +1623,7 @@ define filechk_version.h
 	echo \#define LD_VERSION_STRING \"$$(LC_ALL=C $(LD) --version | head -n 1)\"; )
 endef
 
-DIRTY:=$(shell echo `git describe --dirty|grep -o dirty$$`)
+DIRTY:=$(shell echo `git describe --dirty --always 2>/dev/null|grep -o dirty$$`)
 DEF_DOT_CONFIG_HASH=$(shell echo `cat .tmp_config_from_defconfig.o.md5sum`)
 CUR_DOT_CONFIG_HASH=$(shell echo `md5sum .config| awk '{printf $$1}'`)
 CONFIG_DIRTY:=$(shell if [ $(DEF_DOT_CONFIG_HASH) = $(CUR_DOT_CONFIG_HASH) ]; \

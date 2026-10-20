@@ -38,6 +38,7 @@ struct general_panel {
 #endif
 	unsigned int power_delay_ms;
 	unsigned int disable_delay_ms;
+	bool backlight_enable_before_aux;
 };
 
 static void general_panel_sleep(int msec)
@@ -54,6 +55,15 @@ static int general_panel_unprepare(struct sunxi_drm_panel *panel)
 {
 	struct general_panel *edp_panel = to_general_panel(panel);
 	int i;
+
+	/*
+	 * PE12 is owned by the pwm-backlight device on BPI-M8, but the
+	 * expansion board also needs it asserted while AUX is available.
+	 * Match the early enable in prepare() and drop it before the panel
+	 * supplies are removed.
+	 */
+	if (edp_panel->backlight_enable_before_aux && edp_panel->backlight)
+		backlight_disable(edp_panel->backlight);
 
 	for (i = GPIO_MAX; i > 0; i--) {
 		if (edp_panel->enable_gpio[i - 1])
@@ -107,6 +117,21 @@ static int general_panel_prepare(struct sunxi_drm_panel *panel)
 #else
 			sunxi_drm_gpio_set_value(edp_panel->enable_gpio[i], 1);
 #endif
+	}
+
+	/*
+	 * The BPI-M8 expansion board routes PE12 through the backlight node,
+	 * while that signal must already be high before the eDP AUX/DPCD
+	 * transaction.  Enable the backlight device during panel prepare;
+	 * the later panel enable is harmless and keeps the normal API flow.
+	 */
+	if (edp_panel->backlight_enable_before_aux && edp_panel->backlight) {
+		err = backlight_enable(edp_panel->backlight);
+		if (err < 0) {
+			dev_err(edp_panel->dev,
+				"failed to enable backlight before AUX: %d\n", err);
+			return err;
+		}
 	}
 
 	general_panel_sleep(edp_panel->power_delay_ms);
@@ -220,6 +245,8 @@ static int general_panel_parse_dts(struct general_panel *edp_panel)
 	ret = dev_read_u32(dev, "disable-delay-ms", &edp_panel->disable_delay_ms);
 	if (ret)
 		edp_panel->disable_delay_ms = 10;
+	edp_panel->backlight_enable_before_aux =
+		dev_read_bool(dev, "backlight-enable-before-aux");
 
 	if (dev_read_bool(dev, "reset-gpios")) {
 		gpio = sunxi_drm_gpio_request(dev, "reset-gpios");
@@ -276,4 +303,3 @@ U_BOOT_DRIVER(edp_general_panel) = {
 	.probe	= general_panel_probe,
 	.priv_auto_alloc_size = sizeof(struct general_panel),
 };
-

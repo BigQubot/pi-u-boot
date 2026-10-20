@@ -517,9 +517,9 @@ void sunxi_de_atomic_flush(struct sunxi_de_out *hwde,  struct sunxi_de_flush_cfg
 	}
 
 	//de_rtmx_check_rcq_head_dirty(hwde);
-	if (timeout)
+	if (timeout) {
 		DRM_INFO("%s timeout\n", __func__);
-	else {
+	} else {
 		de_rtmx_set_all_reg_dirty(hwde, 0);
 		sunxi_de_process_late(hwde);
 	}

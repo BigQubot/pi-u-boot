@@ -30,6 +30,13 @@
 #include <bootm.h>
 #include <image.h>
 
+int sunxi_fixup_external_fdt_dram(void *dtb_base);
+#ifdef CONFIG_SUNXI_BOOT_PARAM
+int update_fdt_dram_para_from_bootpara(void *dtb_base);
+#else
+int update_fdt_dram_para(void *dtb_base);
+#endif
+
 #ifndef CONFIG_SYS_BOOTM_LEN
 /* use 8MByte as default max gunzip size
  * want to change the CONFIG_SYS_BOOTM_LEN
@@ -311,6 +318,9 @@ int use_android_image_dtb(void)
  */
 extern bool is_distrobootcmd(void);
 int sunxi_update_fdt_para_for_kernel(void);
+#ifdef CONFIG_AW_DRM
+int sunxi_drm_kernel_para_flush(void);
+#endif
 
 int bootm_find_images(int flag, int argc, char * const argv[])
 {
@@ -354,7 +364,44 @@ int bootm_find_images(int flag, int argc, char * const argv[])
 		images.ft_len  = gd->fdt_size;
 	}
 
+	if (argc > 2 && argv[2] && strcmp(argv[2], "-")) {
+		/*
+		 * Vendor sunxi path normally picks gd->fdt_blob unless distroboot is active.
+		 * For booti/bootz with an explicit third argument (FDT address), keep the
+		 * user-provided tree as the source of truth to avoid handing Linux a stripped
+		 * internal U-Boot DTB.
+		 */
+		images.ft_addr = (char *)simple_strtoul(argv[2], NULL, 16);
+		if (fdt_check_header(images.ft_addr)) {
+			puts("ERROR: invalid external device tree\n");
+			return 1;
+		}
+		images.ft_len  = fdt_totalsize(images.ft_addr);
+		if (sunxi_fixup_external_fdt_dram(images.ft_addr))
+			return 1;
+#ifdef CONFIG_SUNXI_BOOT_PARAM
+		update_fdt_dram_para_from_bootpara(images.ft_addr);
+#else
+		update_fdt_dram_para(images.ft_addr);
+#endif
+		images.ft_len  = fdt_totalsize(images.ft_addr);
+		printf("sunxi: using explicit FDT @ %p size 0x%lx\n",
+		       images.ft_addr, images.ft_len);
+	}
+
 	set_working_fdt_addr((ulong)images.ft_addr);
+
+#ifdef CONFIG_AW_DRM
+	/*
+	 * The normal sunxi board setup exports the active display state into
+	 * U-Boot's own DT.  Distro boot replaces that tree with the external
+	 * kernel DT passed as boot[i] argument 3, so export the state again
+	 * after selecting the final tree.  Linux needs the generated booting-N
+	 * node to preserve the logo and create its early fbdev console.
+	 */
+	if (argc > 2 && argv[2] && strcmp(argv[2], "-"))
+		sunxi_drm_kernel_para_flush();
+#endif
 
 	/* set this env variable for  function boot_relocate_fdt.
 	     use fdt in place

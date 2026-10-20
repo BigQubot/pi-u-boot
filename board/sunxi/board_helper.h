@@ -12,6 +12,7 @@
 
 void sunxi_dump(void *addr, unsigned int size);
 int  sunxi_update_fdt_para_for_kernel(void);
+int  sunxi_fixup_external_fdt_dram(void *dtb_base);
 int  sunxi_update_bootcmd(void);
 int  sunxi_update_partinfo(void);
 int sunxi_update_rotpk_info(void);

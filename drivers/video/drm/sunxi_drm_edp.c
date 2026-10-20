@@ -696,6 +696,11 @@ s32 edp_misc_parse(struct udevice *dev)
 	else
 		edp_core->pclk_limit_khz = 0;
 
+	edp_core->allow_eq_fallback =
+		ofnode_read_bool(dev->node, "edp_allow_eq_fallback");
+	drm_edp->disable_assr =
+		ofnode_read_bool(dev->node, "disable-assr");
+
 	return RET_OK;
 }
 
@@ -2765,8 +2770,25 @@ int sunxi_edp_connector_enable(struct sunxi_drm_connector *connector,
 //		drm_panel_prepare(drm_edp->panel);
 
 
-	if (drm_edp->desc->enable)
-		drm_edp->desc->enable(drm_edp);
+	if (drm_edp->desc->enable) {
+		int ret = drm_edp->desc->enable(drm_edp);
+
+		if (ret)
+			return ret;
+	}
+
+	/* The primary plane is already programmed; source the boot framebuffer. */
+	sunxi_tcon_show_pattern(drm_edp->tcon_dev, PATTERN_DE);
+
+	/*
+	 * AML133X30 completes channel equalization only after the normal stream
+	 * starts. Re-arm the stream after TCON4 is open and DE has a stable frame.
+	 */
+	mdelay(20);
+	edp_hw_link_stop(&drm_edp->edp_hw);
+	edp_hw_video_soft_reset(&drm_edp->edp_hw);
+	edp_hw_link_start(&drm_edp->edp_hw);
+	mdelay(100);
 
 		/* usually for backlight enable */
 //		if (drm_edp->panel)
@@ -2896,10 +2918,17 @@ s32 drm_edp_output_enable(struct sunxi_drm_edp *drm_edp)
 			edp_hw_ssc_set_mode(edp_hw, edp_core->ssc_mode);
 	}
 
-	// edp need assr enable
-	// note: DP should and must not use ASSR, otherwise panel shows nothing
-	if (!edp_core->controller_mode && sink_cap->assr_support && src_cap->assr_support) {
-		ret = edp_hw_assr_enable(edp_hw, true);
+	if (!edp_debug->bypass_training) {
+		ret = edp_main_link_setup(edp_hw, edp_core,
+				false, edp_core->force_level ? true : false);
+		if (ret < 0)
+			goto OUT;
+	}
+
+	/* Keep the transmitter and sink scrambler-reset modes synchronized. */
+	if (!edp_core->controller_mode && sink_cap->assr_support &&
+	    src_cap->assr_support) {
+		ret = edp_hw_assr_enable(edp_hw, !drm_edp->disable_assr);
 		if (ret < 0)
 			goto OUT;
 	}
@@ -2928,16 +2957,14 @@ s32 drm_edp_output_enable(struct sunxi_drm_edp *drm_edp)
 			goto OUT;
 	}
 
-	if (!edp_debug->bypass_training) {
-		ret = edp_main_link_setup(edp_hw, edp_core,
-				false, edp_core->force_level ? true : false);
-		if (ret < 0)
-			goto OUT;
-	}
-
 	edp_hw_video_soft_reset(edp_hw);
 
 	edp_hw_link_start(edp_hw);
+	if (edp_core->allow_eq_fallback) {
+		ret = edp_verify_link_after_start(edp_hw, edp_core);
+		if (ret < 0)
+			goto OUT;
+	}
 
 //	if (dprx_hdcp2_capable(&drm_edp->hdcp))
 //		sunxi_dp_hdcp2_enable(&drm_edp->hdcp);
@@ -2964,7 +2991,8 @@ s32 drm_edp_output_disable(struct sunxi_drm_edp *drm_edp)
 		return ret;
 	}
 
-	if (!edp_core->controller_mode && sink_cap->assr_support && src_cap->assr_support)
+	if (!edp_core->controller_mode && sink_cap->assr_support &&
+	    src_cap->assr_support)
 		edp_hw_assr_enable(edp_hw, false);
 
 	if (src_cap->enhance_frame_support && sink_cap->enhance_frame_support)
@@ -3158,6 +3186,11 @@ s32 drm_dp_output_enable(struct sunxi_drm_edp *drm_edp)
 	}
 
 	edp_hw_link_start(edp_hw);
+	if (edp_core->allow_eq_fallback) {
+		ret = edp_verify_link_after_start(edp_hw, edp_core);
+		if (ret < 0)
+			return RET_FAIL;
+	}
 
 	return RET_OK;
 }

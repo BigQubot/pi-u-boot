@@ -72,6 +72,34 @@ int  __attribute__((weak)) update_bmu_info_to_kernel()
 int disp_lcd_param_update_to_kernel(void);
 int sunxi_drm_kernel_para_flush(void);
 
+int sunxi_fixup_external_fdt_dram(void *dtb_base)
+{
+	phys_size_t dram_size;
+
+	if (!dtb_base) {
+		pr_err("%s: dtb_base is NULL\n", __func__);
+		return -1;
+	}
+
+	dram_size = (phys_size_t)uboot_spare_head.boot_data.dram_scan_size *
+		    1024 * 1024;
+	if (!dram_size) {
+		pr_err("%s: invalid dram_scan_size %u MiB\n", __func__,
+		       uboot_spare_head.boot_data.dram_scan_size);
+		return -1;
+	}
+
+	gd->bd->bi_dram[0].size = dram_size;
+	if (arch_fixup_fdt(dtb_base) < 0) {
+		pr_err("%s: arch_fixup_fdt failed\n", __func__);
+		return -1;
+	}
+
+	tick_printf("sunxi: fixed external FDT DRAM size to %u MiB\n",
+		    uboot_spare_head.boot_data.dram_scan_size);
+	return 0;
+}
+
 #ifdef CONFIG_SUNXI_BOOT_PARAM
 int update_fdt_dram_para_from_bootpara(void *dtb_base)
 {
@@ -106,6 +134,7 @@ int update_fdt_dram_para_from_bootpara(void *dtb_base)
 		sprintf(dram_str, "dram_para%02d", i);
 		fdt_setprop_u32(dtb_base, nodeoffset, dram_str, dram_para[i]);
 	}
+
 	return 0;
 }
 #else

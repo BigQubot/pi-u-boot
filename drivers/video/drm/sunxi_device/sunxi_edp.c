@@ -1111,11 +1111,16 @@ s32 edp_link_cr_training(struct sunxi_edp_hw_desc *edp_hw, struct edp_tx_core *e
 			try_cnt = 0;
 		}
 
-		if ((change & SW_VOLTAGE_CHANGE_FLAG) || (change & PRE_EMPHASIS_CHANGE_FLAG)) {
-			edp_phy_set_training_para(edp_core);
-			edp_hw_set_training_para(edp_hw, edp_core);
-			edp_dpcd_set_training_para(edp_hw, edp_core);
-		}
+
+		/*
+		 * Keep the source PHY and sink lane-set registers synchronized on
+		 * every unsuccessful iteration.  Some sinks repeat the same voltage
+		 * request while their CDR settles, so gating these writes only on a
+		 * changed request leaves the source PHY one training step behind.
+		 */
+		edp_phy_set_training_para(edp_core);
+		edp_hw_set_training_para(edp_hw, edp_core);
+		edp_dpcd_set_training_para(edp_hw, edp_core);
 
 		timeout++;
 	}
@@ -1135,10 +1140,11 @@ s32 edp_link_eq_training(struct sunxi_edp_hw_desc *edp_hw, struct edp_tx_core *e
 	char training_info[16];
 	u32 lane_count = edp_core->lane_para.lane_cnt;
 	u32 try_cnt = 0;
-	bool change;
 	u32 fail_lane;
 	u32 i;
 	u32 training_info_len = 5;
+	u8 lane_status;
+	bool symbol_locked;
 
 	if (edp_source_support_tps3(edp_hw) && edp_sink_support_tps3(edp_hw)) {
 		edp_hw_set_pattern(edp_hw, TRAINING_PATTERN_3, lane_count);
@@ -1167,12 +1173,10 @@ s32 edp_link_eq_training(struct sunxi_edp_hw_desc *edp_hw, struct edp_tx_core *e
 			return RET_OK;
 		}
 
-		change = edp_adjust_train_para(link_status, edp_core);
-		if ((change & SW_VOLTAGE_CHANGE_FLAG) || (change & PRE_EMPHASIS_CHANGE_FLAG)) {
-			edp_phy_set_training_para(edp_core);
-			edp_hw_set_training_para(edp_hw, edp_core);
-			edp_dpcd_set_training_para(edp_hw, edp_core);
-		}
+		edp_adjust_train_para(link_status, edp_core);
+		edp_phy_set_training_para(edp_core);
+		edp_hw_set_training_para(edp_hw, edp_core);
+		edp_dpcd_set_training_para(edp_hw, edp_core);
 	}
 
 	EDP_ERR("EQ training result: lane0:%s lane1:%s lane2:%s lane3:%s align:%s\n",
@@ -1181,7 +1185,67 @@ s32 edp_link_eq_training(struct sunxi_edp_hw_desc *edp_hw, struct edp_tx_core *e
 		fail_lane & (1 << 2) ? "FAIL" : "PASS",
 		fail_lane & (1 << 3) ? "FAIL" : "PASS",
 		fail_lane & (1 << 8) ? "FAIL" : "PASS");
+
+	/*
+	 * AML133X30 reports CR_DONE and SYMBOL_LOCK during TP2, but does not
+	 * assert CHANNEL_EQ_DONE/INTERLANE_ALIGN_DONE until the normal stream
+	 * has been running for several hundred milliseconds.
+	 */
+	if (edp_core->allow_eq_fallback) {
+		symbol_locked = true;
+		for (i = 0; i < lane_count; i++) {
+			lane_status = link_status[DPCD_LANE_STATUS_OFFSET(i)] &
+				      DPCD_LANE_STATUS_MASK(i);
+			if ((lane_status & (DPCD_CR_DONE(i) | DPCD_SYMBOL_LOCK(i))) !=
+			    (DPCD_CR_DONE(i) | DPCD_SYMBOL_LOCK(i))) {
+				symbol_locked = false;
+				break;
+			}
+		}
+
+		if (symbol_locked) {
+			EDP_WRN("TP2 lacks channel EQ/align; defer validation until stream start\n");
+			return RET_OK;
+		}
+	}
+
 	EDP_ERR("retry 5 times but still fail, training2(equalization training) fail!\n");
+	return RET_FAIL;
+}
+
+s32 edp_verify_link_after_start(struct sunxi_edp_hw_desc *edp_hw,
+				struct edp_tx_core *edp_core)
+{
+	char link_status[LINK_STATUS_SIZE] = { 0 };
+	u32 fail_lane = 0;
+	u32 try_cnt;
+	s32 ret;
+
+	for (try_cnt = 0; try_cnt < 60; try_cnt++) {
+		mdelay(25);
+		memset(link_status, 0, sizeof(link_status));
+		fail_lane = 0;
+		ret = edp_get_link_status(edp_hw, link_status);
+		if (ret < 0)
+			continue;
+
+		if (edp_eq_training_done(link_status,
+					 edp_core->lane_para.lane_cnt, &fail_lane)) {
+			EDP_WRN("post-stream EQ/align validation passed after %u polls: %02x %02x %02x\n",
+				try_cnt + 1, link_status[0], link_status[1],
+				link_status[2]);
+			/*
+			 * The panel reaches channel equalization while the normal stream is
+			 * already active.  Re-arm video after synchronization so the first
+			 * MSA begins on a clean frame boundary, matching the Linux driver.
+			 */
+			edp_hw_video_soft_reset(edp_hw);
+			return RET_OK;
+		}
+	}
+
+	EDP_ERR("post-stream EQ/align validation timed out: %02x %02x %02x\n",
+		 link_status[0], link_status[1], link_status[2]);
 	return RET_FAIL;
 }
 

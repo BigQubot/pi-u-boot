@@ -92,6 +92,7 @@ struct sunxi_drm_edp {
 
 	bool sw_enable;
 	bool allow_sw_enable;
+	bool disable_assr;
 
 	struct edp_tx_core edp_core;
 	struct sunxi_edp_hw_desc edp_hw;

@@ -26,6 +26,7 @@ int sunxi_show_bmp(char *name);
 int sunxi_show_bmp_and_backlight(char *name, char *reg);
 int sunxi_backlight_ctrl(char *reg);
 int sunxi_drm_disable(void);
+int sunxi_drm_handoff_to_kernel(void);
 #ifdef __cplusplus
 }
 #endif

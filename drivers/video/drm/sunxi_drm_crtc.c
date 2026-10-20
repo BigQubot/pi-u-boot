@@ -38,6 +38,7 @@
 
 #define to_sunxi_plane(x)			container_of(x, struct sunxi_drm_plane, plane)
 
+static void sunxi_plane_atomic_update(struct drm_plane *plane);
 
 int sunxi_drm_crtc_get_hw_id(struct sunxi_drm_crtc *scrtc)
 {
@@ -51,6 +52,19 @@ int sunxi_drm_crtc_get_hw_id(struct sunxi_drm_crtc *scrtc)
 int sunxi_plane_disable_plane(struct drm_plane *plane)
 {
 	struct drm_plane_state *plane_state = plane->state;
+	struct sunxi_drm_plane *sunxi_plane = to_sunxi_plane(plane);
+	struct sunxi_drm_crtc *crtc = sunxi_plane->crtc;
+	struct display_channel_state *old_ch_state;
+	struct display_channel_state *ch_state;
+	struct display_state *state;
+
+	if (!plane_state) {
+		plane->funcs->reset(plane);
+		plane_state = plane->state;
+	}
+	if (!plane_state || !plane->old_state)
+		return -ENOMEM;
+
 	plane_state->fb = NULL;
 	plane_state->crtc_x = 0;
 	plane_state->crtc_y = 0;
@@ -60,7 +74,16 @@ int sunxi_plane_disable_plane(struct drm_plane *plane)
 	plane_state->src_y = 0;
 	plane_state->src_w = 0;
 	plane_state->src_h = 0;
-	//tigger commit
+
+	sunxi_plane_atomic_update(plane);
+	state = display_state_get_by_crtc(crtc);
+	if (state && crtc->funcs->flush)
+		crtc->funcs->flush(state);
+
+	ch_state = to_display_channel_state(plane_state);
+	old_ch_state = to_display_channel_state(plane->old_state);
+	memcpy(old_ch_state, ch_state, sizeof(struct display_channel_state));
+
 	return 0;
 }
 

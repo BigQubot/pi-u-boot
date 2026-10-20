@@ -25,6 +25,8 @@
 #include <linux/list.h>
 #include <video.h>
 #include <command.h>
+#include <fs.h>
+#include <bmp_layout.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_logo.h>
@@ -44,6 +46,133 @@
 #include "sunxi_drm_crtc.h"
 
 DECLARE_GLOBAL_DATA_PTR;
+
+static int armbian_unload_file(struct file_info_t *file)
+{
+	if (!file)
+		return -1;
+
+	free(file->name);
+	free(file->path);
+	free(file->file_addr);
+	free(file);
+
+	return 0;
+}
+
+static int armbian_print_file_info(struct file_info_t *file)
+{
+	if (!file)
+		return -1;
+
+	pr_err("File name:%s\n", file->name);
+	pr_err("Partition name:%s\n", file->path);
+	pr_err("File size:%u\n", file->file_size);
+	pr_err("File addr:%p\n", file->file_addr);
+
+	return 0;
+}
+
+static struct file_info_t *load_armbian_boot_logo_from(const char *dev_part,
+						       int fstype,
+						       const char *path)
+{
+	loff_t file_size, read_size;
+	struct file_info_t *file;
+	struct bmp_header header;
+
+	if (!dev_part || !path)
+		return NULL;
+
+	if (fs_set_blk_dev("mmc", dev_part, fstype))
+		return NULL;
+
+	if (fs_read(path, (ulong)&header, 0, sizeof(header), &read_size) ||
+	    read_size != sizeof(header))
+		return NULL;
+
+	if (header.signature[0] != 'B' || header.signature[1] != 'M')
+		return NULL;
+
+	file_size = le32_to_cpu(header.file_size);
+	if (file_size < sizeof(header) || file_size > (8 * 1024 * 1024))
+		return NULL;
+
+	file = malloc(sizeof(*file));
+	if (!file)
+		return NULL;
+
+	memset(file, 0, sizeof(*file));
+	file->file_size = (unsigned int)file_size;
+	file->name = malloc(strlen(path) + 1);
+	file->path = malloc(strlen("mmc") + strlen(dev_part) + 1);
+	file->file_addr = memalign(4096, file->file_size);
+	if (!file->name || !file->path || !file->file_addr)
+		goto err_free;
+
+	strncpy(file->name, path, strlen(path) + 1);
+	sprintf(file->path, "mmc%s", dev_part);
+
+	if (fs_set_blk_dev("mmc", dev_part, fstype))
+		goto err_free;
+
+	if (fs_read(path, (ulong)file->file_addr, 0, file_size, &read_size) ||
+	    read_size != file_size)
+		goto err_free;
+
+#if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF)
+	flush_dcache_range((ulong)file->file_addr,
+			   ALIGN((ulong)(file->file_addr + file->file_size),
+				 CONFIG_SYS_CACHELINE_SIZE));
+#endif
+
+	file->unload_file = armbian_unload_file;
+	file->print_file_info = armbian_print_file_info;
+	printf("armbian logo: loaded mmc %s %s size %u\n", dev_part, path,
+	       file->file_size);
+
+	return file;
+
+err_free:
+	free(file->name);
+	free(file->path);
+	free(file->file_addr);
+	free(file);
+
+	return NULL;
+}
+
+static struct file_info_t *load_armbian_boot_logo(const char *name)
+{
+	static const char * const fat_parts[] = { "0:1", "2:1" };
+	static const char * const ext_parts[] = { "0:2", "0:1", "2:1", "2:2" };
+	struct file_info_t *file;
+	char boot_path[64];
+	unsigned int i;
+	int len;
+
+	if (!name)
+		return NULL;
+
+	len = snprintf(boot_path, sizeof(boot_path), "/boot/%s", name);
+	if (len < 0 || len >= sizeof(boot_path))
+		return NULL;
+
+	/* SD images have a FAT boot partition; eMMC installs may use ext4. */
+	for (i = 0; i < ARRAY_SIZE(fat_parts); i++) {
+		file = load_armbian_boot_logo_from(fat_parts[i], FS_TYPE_FAT, name);
+		if (file)
+			return file;
+	}
+	for (i = 0; i < ARRAY_SIZE(ext_parts); i++) {
+		file = load_armbian_boot_logo_from(ext_parts[i], FS_TYPE_EXT,
+						   boot_path);
+		if (file)
+			return file;
+	}
+
+	return NULL;
+}
 
 int check_drm_debug_mode(void)
 {
@@ -79,7 +208,8 @@ int sunxi_drm_kernel_para_flush(void)
 	struct display_state *state;
 	struct sunxi_drm_device *drm = sunxi_drm_device_get();
 	struct drm_framebuffer *fb;
-	int node = fdt_path_offset(working_fdt, "/soc/sunxi-drm");
+	int node = fdt_node_offset_by_compatible(working_fdt, -1,
+						 "allwinner,sunxi-drm");
 	struct drm_display_mode *mode;
 	int boot_info_node = 0;
 	int boot_mode_node = 0;
@@ -89,6 +219,11 @@ int sunxi_drm_kernel_para_flush(void)
 
 	if (!drm || check_drm_debug_mode() == SKIP_DRM_DRIVE)
 		return -1;
+	if (node < 0) {
+		DRM_ERROR("%s: sunxi-drm node not found: %s\n", __func__,
+			  fdt_strerror(node));
+		return node;
+	}
 
 	sunxi_drm_for_each_display(state, drm) {
 		if (state->is_enable) {
@@ -691,7 +826,7 @@ static int sunxi_drm_drv_probe(struct udevice *dev)
 	sunxi_drm_for_each_display(tmp_s, drm) {
 		cmd2.width = tmp_s->conn_state.mode.hdisplay;
 		cmd2.height = tmp_s->conn_state.mode.vdisplay;
-		cmd2.pixel_format = DRM_FORMAT_ARGB8888;
+		cmd2.pixel_format = DRM_FORMAT_XRGB8888;
 		cmd2.pitches[0] = cmd2.width * (ALIGN(32, 8) >> 3);
 		cmd2.offsets[0] = 0;
 		tmp_s->fb_id = drm_framebuffer_alloc(drm, &cmd2);
@@ -825,10 +960,17 @@ static int load_bmp_logo(struct display_state *state, char *bmp_name)
 		state->logo = NULL;
 	}
 
-	state->logo = load_file(bmp_name, "bootloader");
-	if (!state->logo) {
+	state->logo = load_armbian_boot_logo("boot.bmp");
+	if (!state->logo)
+		state->logo = load_armbian_boot_logo("bootlogo.bmp");
+	if (!state->logo && strcmp(bmp_name, "boot.bmp") &&
+	    strcmp(bmp_name, "bootlogo.bmp"))
+		state->logo = load_armbian_boot_logo(bmp_name);
+
+	if (!state->logo)
+		state->logo = load_file(bmp_name, "bootloader");
+	if (!state->logo)
 		state->logo = load_file(bmp_name, "boot-resource");
-	}
 
 	if (!state->logo) {
 		DRM_ERROR("Can not load %s file!\n", bmp_name);
@@ -846,6 +988,7 @@ static int display_set_plane(struct display_state *state)
 	struct connector_state *conn_state = &state->conn_state;
 	struct drm_mode_set_plane plane_req;
 	struct drm_display_mode *mode = &conn_state->mode;
+	int ret;
 
 	if (!state->is_init)
 		return -EINVAL;
@@ -861,6 +1004,12 @@ static int display_set_plane(struct display_state *state)
 	}
 
 	plane_req.plane_id = drm_get_primary_plane_id(state->drm, plane_req.crtc_id);
+	if (plane_req.plane_id < 0) {
+		DRM_ERROR("Failed to get primary plane for crtc %d\n",
+			  plane_req.crtc_id);
+		return -ENODEV;
+	}
+
 	plane_req.crtc_x = 0;
 	plane_req.crtc_y = 0;
 	plane_req.crtc_w = mode->hdisplay;
@@ -870,8 +1019,45 @@ static int display_set_plane(struct display_state *state)
 	plane_req.src_w = mode->hdisplay << 16;
 	plane_req.src_h = mode->vdisplay << 16;
 
-	return drm_mode_setplane(state->drm, &plane_req);
+	ret = drm_mode_setplane(state->drm, &plane_req);
+	if (ret)
+		DRM_ERROR("Failed to set plane %d fb %d on crtc %d: %d\n",
+			  plane_req.plane_id, plane_req.fb_id,
+			  plane_req.crtc_id, ret);
 
+	return ret;
+
+}
+
+static int display_clear_plane_for_handoff(struct display_state *state)
+{
+	struct crtc_state *crtc_state = &state->crtc_state;
+	struct drm_mode_set_plane plane_req;
+	int ret;
+
+	if (!state->is_init || !state->is_enable)
+		return 0;
+
+	memset(&plane_req, 0, sizeof(plane_req));
+
+	plane_req.crtc_id = crtc_state->crtc_id;
+	plane_req.fb_id = -1;
+	plane_req.plane_id = drm_get_primary_plane_id(state->drm,
+						      plane_req.crtc_id);
+	if (plane_req.plane_id < 0) {
+		DRM_ERROR("Failed to get primary plane for crtc %d\n",
+			  plane_req.crtc_id);
+		return -ENODEV;
+	}
+
+	ret = drm_mode_setplane(state->drm, &plane_req);
+	if (ret) {
+		DRM_ERROR("Failed to clear plane %d on crtc %d: %d\n",
+			  plane_req.plane_id, plane_req.crtc_id, ret);
+		return ret;
+	}
+
+	return 0;
 }
 
 static int display_enable(struct display_state *state)
@@ -879,6 +1065,7 @@ static int display_enable(struct display_state *state)
 	struct crtc_state *crtc_state = &state->crtc_state;
 	const struct sunxi_drm_crtc *crtc = crtc_state->crtc;
 	const struct sunxi_drm_crtc_funcs *crtc_funcs = crtc->funcs;
+	int ret;
 	/*struct drm_framebuffer *fb = NULL;*/
 	/*struct video_priv *uc_priv = dev_get_uclass_priv(state->drm->dev);*/
 
@@ -896,7 +1083,9 @@ static int display_enable(struct display_state *state)
 	if (crtc_funcs->enable)
 		crtc_funcs->enable(state);
 
-	display_set_plane(state);
+	ret = display_set_plane(state);
+	if (ret)
+		return ret;
 
 	sunxi_drm_connector_enable(state);
 
@@ -1245,24 +1434,22 @@ static int display_logo(struct display_state *state)
 	}
 
 	fb = drm_framebuffer_lookup(state->drm, state->fb_id);
-
-	if (fb) {
-		memset((void *)fb->dma_addr, 0, fb->buf_size);
-		flush_dcache_range((ulong)fb->dma_addr,
-				   ALIGN((ulong)(fb->dma_addr + fb->buf_size),
-					 CONFIG_SYS_CACHELINE_SIZE));
+	if (!fb) {
+		DRM_ERROR("Logo framebuffer %d not found\n", state->fb_id);
+		return -ENOMEM;
 	}
 
 	// FIXME: dual display, modify it if some new demands need later
-	if (plat->base != fb->dma_addr) {
-		plat->base = fb->dma_addr;
-		plat->size = fb->buf_size;
-		priv->xsize = state->conn_state.mode.hdisplay;
-		priv->ysize = state->conn_state.mode.vdisplay;
-		priv->fb = map_sysmem(plat->base, plat->size);
-		priv->line_length = priv->xsize * VNBYTES(priv->bpix);
-		priv->fb_size = priv->line_length * priv->ysize;
-	}
+	plat->base = fb->dma_addr;
+	plat->size = fb->buf_size;
+	priv->xsize = state->conn_state.mode.hdisplay;
+	priv->ysize = state->conn_state.mode.vdisplay;
+	priv->bpix = VIDEO_BPP32;
+	priv->fb = map_sysmem(plat->base, plat->size);
+	priv->line_length = fb->pitches[0];
+	priv->fb_size = fb->buf_size;
+
+	memset(priv->fb, 0, priv->fb_size);
 
 	bmp = map_sysmem((ulong)state->logo->file_addr, 0);
 	if (fb->width > bmp->header.width)
@@ -1270,7 +1457,14 @@ static int display_logo(struct display_state *state)
 	if (fb->height > bmp->header.height)
 		upper_offset = ((fb->height - bmp->header.height) >> 1);
 
-	bmp_display((ulong)state->logo->file_addr, left_offset, upper_offset);
+	ret = bmp_display((ulong)state->logo->file_addr, left_offset, upper_offset);
+	if (ret) {
+		DRM_ERROR("bmp_display failed: %d\n", ret);
+		return ret;
+	}
+	flush_dcache_range((ulong)fb->dma_addr,
+			   ALIGN((ulong)(fb->dma_addr + fb->buf_size),
+				 CONFIG_SYS_CACHELINE_SIZE));
 
 	ret = display_enable(state);
 	if (ret) {
@@ -1319,15 +1513,32 @@ int sunxi_drm_disable(void)
 	struct display_state *state;
 	struct sunxi_drm_device *drm = sunxi_drm_device_get();
 
-	DRM_INFO("%s:%d\n", __func__, __LINE__);
-	if (!drm || list_empty(&drm->display_list)) {
-		DRM_ERROR("%s:Get sunxi drm device fail!\n", __func__);
+	if (!drm || list_empty(&drm->display_list))
 		return -1;
-	}
 
 	sunxi_drm_for_each_display(state, drm) {
 		if (state->is_enable)
-			sunxi_drm_panel_post_disable(state);
+			display_disable(state);
+	}
+
+	return 0;
+}
+
+int sunxi_drm_handoff_to_kernel(void)
+{
+	struct display_state *state;
+	struct sunxi_drm_device *drm = sunxi_drm_device_get();
+	int ret = 0;
+
+	if (!drm || list_empty(&drm->display_list))
+		return -1;
+
+	sunxi_drm_for_each_display(state, drm) {
+		if (state->is_enable) {
+			ret = display_clear_plane_for_handoff(state);
+			if (ret)
+				return ret;
+		}
 	}
 
 	return 0;

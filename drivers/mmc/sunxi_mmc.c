@@ -30,6 +30,11 @@
 #endif
 
 #define DTO_MAX 200
+/*
+ * Keep single MMC requests below 16 MiB. Large one-shot reads are unstable
+ * on sun60iw2 SD boot, while split requests are reliable.
+ */
+#define SUNXI_MMC_SAFE_MAX_BLKS	0x7fff
 
 #if !CONFIG_IS_ENABLED(DM_MMC)
 /* support 4 mmc hosts */
@@ -915,7 +920,14 @@ static int sunxi_mmc_do_send_cmd_common(struct sunxi_mmc_priv *priv,
 	}
 
 	if (data) {
-		timeout_msecs = 6000;
+		/*
+		 * Large FAT reads on this board can take longer than the
+		 * fixed 6s timeout. Scale the wait with transfer size and
+		 * keep a sane minimum for small reads.
+		 */
+		timeout_msecs = bytecnt >> 11; /* ~2 KiB/ms */
+		if (timeout_msecs < 6000)
+			timeout_msecs = 6000;
 		MMCDBG("cacl timeout %x msec\n", timeout_msecs);
 		error = mmc_rint_wait(priv, mmc, timeout_msecs,
 				      data->blocks > 1 ?
@@ -1363,6 +1375,8 @@ struct mmc *sunxi_mmc_init(int sdc_no)
 	cfg->voltages = MMC_VDD_32_33 | MMC_VDD_33_34;
 	cfg->host_caps |= MMC_MODE_HS_52MHz | MMC_MODE_HS | MMC_MODE_DDR_52MHz;
 	cfg->b_max = CONFIG_SYS_MMC_MAX_BLK_COUNT;
+	if (cfg->b_max > SUNXI_MMC_SAFE_MAX_BLKS)
+		cfg->b_max = SUNXI_MMC_SAFE_MAX_BLKS;
 
 	/* default f_min and f_max */
 	cfg->f_min = 400000;/* 400K */
@@ -1523,6 +1537,8 @@ static int sunxi_mmc_probe(struct udevice *dev)
 		cfg->host_caps |= MMC_MODE_4BIT;
 	cfg->host_caps |= MMC_MODE_HS_52MHz | MMC_MODE_HS;
 	cfg->b_max = CONFIG_SYS_MMC_MAX_BLK_COUNT;
+	if (cfg->b_max > SUNXI_MMC_SAFE_MAX_BLKS)
+		cfg->b_max = SUNXI_MMC_SAFE_MAX_BLKS;
 	cfg->f_min = 400000;
 	cfg->f_max = 52000000;
 

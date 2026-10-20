@@ -145,8 +145,8 @@ static inline u32 sunxi_pwm_writel(struct sunxi_pwm_chip *chip, u32 offset, u32 
 extern int fdt_set_all_pin(const char *node_path, const char *pinctrl_name);
 static int sunxi_pwm_pin_set_state(char *dev_name, char *name)
 {
-	char compat[32];
-	u32 len = 0;
+	char compat[64];
+	const char *node_path;
 	int state = 0;
 	int ret = -1;
 
@@ -155,13 +155,23 @@ static int sunxi_pwm_pin_set_state(char *dev_name, char *name)
 	else
 		state = 0;
 
-	len = sprintf(compat, "/soc/%s", dev_name);
-	if (len > 32)
-		printf("disp_sys_set_state, size of mian_name is out of range\n");
+	/*
+	 * Older sunxi trees put every PWM node directly below /soc.  A733 has
+	 * multiple PWM controllers below /soc@29000000, so /soc/pwm18 does not
+	 * exist.  pwm_request() already uses the pwmN aliases to find the right
+	 * controller; use the same alias here when selecting its pinctrl state.
+	 */
+	node_path = fdt_get_alias(working_fdt, dev_name);
+	if (!node_path) {
+		snprintf(compat, sizeof(compat), "/soc/%s", dev_name);
+		node_path = compat;
+	}
 
-	ret = fdt_set_all_pin(compat, (state == 1) ? "pinctrl-0" : "pinctrl-1");
+	ret = fdt_set_all_pin(node_path,
+			      (state == 1) ? "pinctrl-0" : "pinctrl-1");
 	if (ret != 0)
-		printf("%s, fdt_set_all_pin, ret=%d\n", __func__, ret);
+		printf("%s: %s (%s) fdt_set_all_pin ret=%d\n",
+		       __func__, dev_name, node_path, ret);
 
 	return ret;
 }
@@ -764,4 +774,3 @@ err_pwm:
 		free(pchip);
 	return -1;
 }
-

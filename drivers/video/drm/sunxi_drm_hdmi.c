@@ -1023,7 +1023,7 @@ int __sunxi_hdmi_init_dts(struct sunxi_drm_hdmi *hdmi)
 	const char *dts_timming = NULL;
 	char *p = NULL, *end = NULL;
 	struct drm_display_mode *timming = drm_mode_create();
-	unsigned long val[9];
+	unsigned long val[10];
 
 	hdmi->hdmi_core.reg_base = (uintptr_t)dev_read_addr(dev);
 	if (hdmi->hdmi_core.reg_base <= 0) {
@@ -1052,7 +1052,7 @@ int __sunxi_hdmi_init_dts(struct sunxi_drm_hdmi *hdmi)
 		if (!IS_ERR_OR_NULL(dts_timming)) {
 			p = (char *)dts_timming;
 
-			while (i < 9 && p) {
+			while (i < 10 && p) {
 				val[i] = simple_strtoul(p, &end, 10);
 				if (end == p)
 					break;
@@ -1060,7 +1060,7 @@ int __sunxi_hdmi_init_dts(struct sunxi_drm_hdmi *hdmi)
 				i++;
 			}
 
-			if (i == 9) {
+			if (i >= 9) {
 				timming->clock       = val[0];
 				timming->hdisplay    = val[1];
 				timming->hsync_start = val[2];
@@ -1070,6 +1070,9 @@ int __sunxi_hdmi_init_dts(struct sunxi_drm_hdmi *hdmi)
 				timming->vsync_start = val[6];
 				timming->vsync_end   = val[7];
 				timming->vtotal      = val[8];
+				timming->flags       = i == 10 ?
+						       val[9] :
+						       DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
 				timming->type = DRM_MODE_TYPE_PREFERRED | DRM_MODE_TYPE_USERDEF;
 				hdmi->hdmi_ctrl.drv_dts_force_mode = value;
 				hdmi->hdmi_ctrl.drv_dts_mode = timming;

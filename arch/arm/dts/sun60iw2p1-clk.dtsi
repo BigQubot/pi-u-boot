@@ -381,6 +381,8 @@ clocks {
 		clk_hdmi_tv: hdmi_tv {
 			#clock-cells = <0>;
 			compatible = "allwinner,periph-clock";
+			assigned-clocks = <&clk_hdmi_tv>;
+			assigned-clock-parents = <&clk_pll_video1x4>;
 			clock-output-names = "hdmi_tv";
 		};
 

@@ -215,7 +215,7 @@ int drm_framebuffer_alloc(struct sunxi_drm_device *drm, struct drm_mode_fb_cmd2 
 	struct drm_framebuffer *fb = NULL;
 	int ret = -1, i = 0;
 	const struct drm_format_info *info = NULL;
-	u32 cpp = 0;
+	u32 buf_size = 0;
 
 	if (!drm || !r) {
 		return -EINVAL;
@@ -239,9 +239,15 @@ int drm_framebuffer_alloc(struct sunxi_drm_device *drm, struct drm_mode_fb_cmd2 
 	if (ret)
 		goto FREE_FB;
 
-	cpp = DIV_ROUND_UP(info->depth, 8);
+	for (i = 0; i < info->num_planes; i++) {
+		unsigned int height = fb_plane_height(r->height, info, i);
+		u32 plane_size = r->offsets[i] + r->pitches[i] * height;
 
-	fb->buf_size = ALIGN(cpp * r->width * r->height, 4096);
+		if (plane_size > buf_size)
+			buf_size = plane_size;
+	}
+
+	fb->buf_size = ALIGN(buf_size, 4096);
 
 	fb->dma_addr = (unsigned long)memalign(4096, fb->buf_size);
 	if (!fb->dma_addr) {
@@ -309,5 +315,3 @@ struct drm_framebuffer *drm_framebuffer_lookup(struct sunxi_drm_device *drm, int
 
 	return NULL;
 }
-
-
