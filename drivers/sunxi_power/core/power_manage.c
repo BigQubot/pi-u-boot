@@ -205,7 +205,8 @@ int axp_set_power_supply_output(void)
 
 #if !defined(CONFIG_SUNXI_GPIO_POWER_VOL_MODE) && !defined(CONFIG_SUNXI_GPIO_NOT_CTRL_BY_POWER)
 		for (i = 0; i < sizeof(pin_bias)/sizeof(pin_bias[0]); i++) {
-			if (!strncmp(pin_bias[i].supply_name, power_name, sizeof(power_name))) {
+			if (pin_bias[i].supply_name &&
+			    !strncmp(pin_bias[i].supply_name, power_name, sizeof(power_name))) {
 				if (pin_bias[i].gpio_bias == 0)
 					pin_bias[i].gpio_bias = power_vol_d;
 
