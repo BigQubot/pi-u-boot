@@ -307,8 +307,6 @@ int sunxi_drm_kernel_para_flush(void)
 }
 
 static int display_init(struct display_state *state);
-#define SUNXI_DISPLAY_MAX_WIDTH 4096
-#define SUNXI_DISPLAY_MAX_HEIGHT 4096
 
 static const struct udevice_id sunxi_of_match[] = {
 	{
@@ -666,14 +664,60 @@ err:
 	return 0;
 }
 
+static void sunxi_drm_init_framebuffers(struct udevice *dev)
+{
+	struct video_priv *priv = dev_get_uclass_priv(dev);
+	struct video_uc_platdata *plat = dev_get_uclass_platdata(dev);
+	struct sunxi_drm_device *drm = dev_get_priv(dev);
+	struct display_state *state;
+	struct drm_framebuffer *fb;
+	struct drm_mode_fb_cmd2 cmd = { 0 };
+
+	priv->xsize = 0;
+	priv->ysize = 0;
+	plat->base = 0;
+	plat->size = 0;
+
+	sunxi_drm_for_each_display(state, drm) {
+		state->fb_id = -1;
+		if (!state->is_init || state->conn_state.mode.hdisplay <= 0 ||
+		    state->conn_state.mode.vdisplay <= 0)
+			continue;
+
+		cmd.width = state->conn_state.mode.hdisplay;
+		cmd.height = state->conn_state.mode.vdisplay;
+		cmd.pixel_format = DRM_FORMAT_XRGB8888;
+		cmd.pitches[0] = cmd.width * 4;
+		state->fb_id = drm_framebuffer_alloc(drm, &cmd);
+		if (state->fb_id < 0) {
+			DRM_ERROR("Failed to allocate display framebuffer: %d\n",
+				  state->fb_id);
+			continue;
+		}
+
+		fb = drm_framebuffer_lookup(drm, state->fb_id);
+		if (!fb) {
+			DRM_ERROR("Display framebuffer %d not found\n", state->fb_id);
+			state->fb_id = -1;
+			continue;
+		}
+
+		if (!priv->xsize || !priv->ysize) {
+			priv->xsize = cmd.width;
+			priv->ysize = cmd.height;
+			plat->base = fb->dma_addr;
+			plat->size = fb->buf_size;
+		}
+	}
+}
+
 static int sunxi_drm_drv_probe(struct udevice *dev)
 {
 	struct video_priv *uc_priv = dev_get_uclass_priv(dev);
-	struct video_uc_platdata *plat = dev_get_uclass_platdata(dev);
 	struct udevice *crtc_dev, *tcon_dev;
 	struct sunxi_drm_crtc *crtc;
 	struct sunxi_drm_connector *conn;
-	struct display_state *s, *tmp_s;
+	struct display_state *s;
 	struct sunxi_drm_device *drm;
 	const char *name;
 	size_t phandle_count = 0;
@@ -681,10 +725,6 @@ static int sunxi_drm_drv_probe(struct udevice *dev)
 	ofnode node, route_node, timing_node;
 	ofnode port_node[2], sunxi_node[2], ep_node[2], port_parent_node[2];
 	bool is_ports_node[2] = {false, false};
-	struct drm_mode_fb_cmd2 cmd2;
-	struct drm_framebuffer *fb;
-
-	memset(&cmd2, 0, sizeof(struct drm_mode_fb_cmd2));
 
 	route_node = dev_read_subnode(dev, "route");
 	if (!ofnode_valid(route_node))
@@ -780,6 +820,7 @@ static int sunxi_drm_drv_probe(struct udevice *dev)
 			continue;
 
 		memset(s, 0, sizeof(*s));
+		s->fb_id = -1;
 
 		INIT_LIST_HEAD(&s->head);
 		ret = ofnode_read_string_index(node, "logo,uboot", 0, &name);
@@ -822,27 +863,15 @@ static int sunxi_drm_drv_probe(struct udevice *dev)
 	}
 	sunxi_get_baseparameter();
 	display_pre_init();
-
-	sunxi_drm_for_each_display(tmp_s, drm) {
-		cmd2.width = tmp_s->conn_state.mode.hdisplay;
-		cmd2.height = tmp_s->conn_state.mode.vdisplay;
-		cmd2.pixel_format = DRM_FORMAT_XRGB8888;
-		cmd2.pitches[0] = cmd2.width * (ALIGN(32, 8) >> 3);
-		cmd2.offsets[0] = 0;
-		tmp_s->fb_id = drm_framebuffer_alloc(drm, &cmd2);
-		fb = drm_framebuffer_lookup(drm, tmp_s->fb_id);
-
-		if (!uc_priv->xsize || !uc_priv->ysize) {
-			uc_priv->xsize = tmp_s->conn_state.mode.hdisplay;
-			uc_priv->ysize = tmp_s->conn_state.mode.vdisplay;
-			plat->base = fb->dma_addr;
-			plat->size = fb->buf_size;
-		}
-	}
+	sunxi_drm_init_framebuffers(dev);
 
 	if (!uc_priv->xsize || !uc_priv->ysize) {
-		uc_priv->xsize = SUNXI_DISPLAY_MAX_WIDTH;
-		uc_priv->ysize = SUNXI_DISPLAY_MAX_HEIGHT;
+		/*
+		 * Keep DRM objects alive for later logo and kernel handoff calls.
+		 * The video uclass must not create a console without a framebuffer.
+		 */
+		printf("No usable display framebuffer; continuing without video\n");
+		return 0;
 	}
 
 	uc_priv->bpix = VIDEO_BPP32;
@@ -1069,7 +1098,7 @@ static int display_enable(struct display_state *state)
 	/*struct drm_framebuffer *fb = NULL;*/
 	/*struct video_priv *uc_priv = dev_get_uclass_priv(state->drm->dev);*/
 
-	if (!state->is_init)
+	if (!state->is_init || state->fb_id < 0)
 		return -EINVAL;
 
 	if (state->is_enable)
@@ -1494,6 +1523,8 @@ int sunxi_show_bmp_and_backlight(char *bmp, char *reg)
 	}
 
 	sunxi_drm_for_each_display(s, drm) {
+		if (!s->is_init || s->fb_id < 0)
+			continue;
 		/*s->logo.mode = s->charge_logo_mode;*/
 		if (load_bmp_logo(s, bmp))
 			continue;
@@ -1563,6 +1594,8 @@ int sunxi_show_bmp(char *bmp)
 	}
 
 	sunxi_drm_for_each_display(s, drm) {
+		if (!s->is_init || s->fb_id < 0)
+			continue;
 		/*s->logo.mode = s->charge_logo_mode;*/
 		if (load_bmp_logo(s, bmp))
 			continue;
@@ -1617,6 +1650,8 @@ int sunxi_show_logo(void)
 	}
 
 	sunxi_drm_for_each_display(s, drm) {
+		if (!s->is_init || s->fb_id < 0)
+			continue;
 		/*s->logo.mode = s->logo_mode;*/
 		if (load_bmp_logo(s, s->ulogo_name)) {
 			DRM_ERROR("load logo fail\n");
@@ -1645,6 +1680,8 @@ struct drm_framebuffer *drm_fb_lock(void)
 	}
 
 	sunxi_drm_for_each_display(state, drm) {
+		if (!state->is_init || state->fb_id < 0)
+			continue;
 		ret = display_check(state);
 		if (ret) {
 			DRM_ERROR("display check fail!\n");

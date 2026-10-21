@@ -195,7 +195,7 @@ int video_bmp_display(struct udevice *dev, ulong bmp_image, int x, int y,
 	ushort *cmap_base = NULL;
 	int i, j;
 	uchar *fb;
-	struct bmp_image *bmp = map_sysmem(bmp_image, 0);
+	struct bmp_image *bmp;
 	uchar *bmap;
 	ushort padded_width;
 	unsigned long width, height, byte_width, bmp_stride;
@@ -204,6 +204,10 @@ int video_bmp_display(struct udevice *dev, ulong bmp_image, int x, int y,
 	struct bmp_color_table_entry *palette;
 	int hdr_size;
 
+	if (!priv->fb || !priv->xsize || !priv->ysize)
+		return -ENODEV;
+
+	bmp = map_sysmem(bmp_image, 0);
 	if (!bmp || !(bmp->header.signature[0] == 'B' &&
 	    bmp->header.signature[1] == 'M')) {
 		printf("Error: no valid bmp image at %lx\n", bmp_image);

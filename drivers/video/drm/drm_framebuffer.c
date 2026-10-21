@@ -229,6 +229,7 @@ int drm_framebuffer_alloc(struct sunxi_drm_device *drm, struct drm_mode_fb_cmd2 
 	fb->fb_id = id_manager_alloc(&g_id_mgr);
 	if (fb->fb_id < 0) {
 		pr_err("id_manager_alloc fail!\n");
+		ret = fb->fb_id;
 		goto FREE_FB;
 	}
 
@@ -273,6 +274,7 @@ int drm_framebuffer_alloc(struct sunxi_drm_device *drm, struct drm_mode_fb_cmd2 
 
 FREE_FB:
 	if (fb) {
+		id_manager_free(&g_id_mgr, fb->fb_id);
 		kfree(fb);
 	}
 
